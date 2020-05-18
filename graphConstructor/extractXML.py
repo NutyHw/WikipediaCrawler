@@ -1,88 +1,115 @@
+import os
+import logging
+from dotenv import load_dotenv
+from pymongo import MongoClient
 from lxml import etree
 from copy import deepcopy
+import re
 import json
 import gc
 
-def extractRevision():
-    events = ( 'start' , 'end' )
-    context = etree.iterparse('../data/thwiki-20200201-pages-meta-history.xml', events=events) 
+logging.basicConfig(level = logging.INFO, filename = 'extractXML.log', format='%(name)s - %(levelname)s - %(message)s')
 
+def parse_xml(path, maxlength):
+    all_revisions = list()
+    all_pages = list()
+
+    context = etree.iterparse(path, events=('start','end',))
+    context = iter(context)
+
+    queue = list()
     revision = dict()
-    contentRevision = dict()
-
-    isInPage = False
-    isInRevisions = False
-    isInContributor = False
+    page = dict()
+    user= dict()
 
     for event, elem in context:
-        if elem.tag == 'page':
-            isInPage = not isInPage
-            continue
+        try:
+            if (len(all_revisions) + len(all_pages)) >= maxlength:
+                yield ( all_pages, all_revisions )
+                all_revisions.clear()
+                all_pages.clear()
 
-        elif elem.tag == 'revision':
-            isInRevisions = not isInRevisions
+            # process element
+            tag = re.sub(r'{.+}','',elem.tag)
+
             if event == 'start':
-                revision.clear()
+                queue.append(tag)
+
+            elif event == 'end':
+                if tag == 'contributor':
+                    revision['user'] = deepcopy(user)
+                    user.clear()
+
+                elif tag == 'revision':
+                    if 'id' in page.keys():
+                        revision['pageid'] = page['id']
+                    revision.pop('contributor',None)
+                    if page['ns'] == 1:
+                        all_revisions.append(deepcopy(revision))
+                    revision.clear()
+
+                elif tag == 'page':
+                    if page['ns'] == 1:
+                        all_pages.append(deepcopy(page))
+                    page.clear()
+
+                queue.pop(-1)
+
+            if len(queue) < 2:
+                parent = None
             else:
-                yield deepcopy(revision)
-            continue
+                parent = queue[-2]
 
-        elif elem.tag == 'contributor':
-            isInContributor = not isInContributor
-            continue
-
-        if event == 'start':
-            if isInContributor:
-                if elem.tag == 'id':
-                    revision['userID'] = elem.text
-                else:
-                    revision[elem.tag] = elem.text
-            
-            elif isInRevisions:
-                if elem.tag == 'id':
-                    revision['revID'] = elem.text
-                elif elem.tag == 'text':
-                    contentRevision['text'] = elem.text
-                    contentRevision['revID'] = revision['revID']
-
-                    yield deepcopy(contentRevision)
-                    contentRevision.clear()
-                else:
-                    revision[elem.tag] = elem.text
-
-            elif isInPage:
-                if elem.tag == 'id':
-                    revision['pageid'] = elem.text
-                else:
-                    revision[elem.tag] = elem.text
+            if 'contributor' == parent:
+                if elem.text is not None:
+                    user[tag] = elem.text
                 
+            if 'revision' == parent:
+                if elem.text is not None:
+                    revision[tag] = elem.text
 
-        elem.clear(keep_tail = True)
-        
-        while elem.getprevious() is not None:
-            del elem.getparent()[0]
+            if 'page' == parent:
+                if tag in [ 'id', 'ns', 'title' ]:
+                    if elem.text is not None:
+                        page[tag] = elem.text
+
+            elem.clear()
+            while elem.getprevious() is not None:
+                del elem.getparent()[0]
+        except Exception as e:
+            logging.error(e)
+            logging.error(f'error while process {revision}')
+            logging.error(f'error while process {page}')
+            logging.error(f'error while process {user}')
 
 if __name__ == '__main__':
-    generator = extractRevision()
+    path = '/d1/home/saito/Wikipedia_mining/data/rawdata/thwiki-20200201-pages-meta-history.xml'
+    xml_generator = parse_xml(path, 50000) 
+
+    # authenmongo
+    load_dotenv(dotenv_path = '../.env') 
+    username = os.getenv('mongo_username')
+    password = os.getenv('mongo_password')
+    db = os.getenv('db')
     
-    content = list()
-    revision = list()
+    client = MongoClient('localhost:27017',
+                        username = username,
+                        password = password,
+                        authSource = 'wikipedia'
+                        )
+    pages_col = client.wikipedia.all_pages
+    revs_col = client.wikipedia.all_revisions
 
-    for i in range(10):
-        print(next(generator))
-
-#    while True:
-#        try:
-#            result = next(generator)
-#            if 'text' in result.keys():
-#                content.append(result)
-#            else:
-#                revision.append(result) 
-#        except StopIteration:
-#            break
-#    
-#    with open('content.txt','w') as f:
-#        json.dump(content,f)
-#
-#    with open('revision.txt','w') as f:
-#        json.dump(revision,f) 
+    count = 0
+    while True:
+        try:
+            pages, revs = next(xml_generator)
+            pages = [ dict(t) for t in {tuple(d.items()) for d in pages} ]
+            revs = [ dict(t) for t in {tuple(d.items()) for d in revs} ]
+            count += len(pages)
+            logging.info(f'extract {count} title')
+            pages_col.insert_many(pages)
+            revs_col.insert_many(revs)
+            logging.info(f'insert in db success')
+        except StopIteration:
+            break
