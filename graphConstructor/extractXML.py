@@ -25,7 +25,7 @@ def parse_xml(path, maxlength):
     for event, elem in context:
         try:
             if (len(all_revisions) + len(all_pages)) >= maxlength:
-                yield ( all_pages, all_revisions )
+                yield ( deepcopy(all_pages), deepcopy(all_revisions) )
                 all_revisions.clear()
                 all_pages.clear()
 
@@ -37,19 +37,22 @@ def parse_xml(path, maxlength):
 
             elif event == 'end':
                 if tag == 'contributor':
-                    revision['user'] = deepcopy(user)
+                    for key in user.keys():
+                        revision[key] = user[key] 
                     user.clear()
 
                 elif tag == 'revision':
                     if 'id' in page.keys():
                         revision['pageid'] = page['id']
+                    if 'title' in page.keys():
+                        revision['title'] = page['title']
                     revision.pop('contributor',None)
-                    if page['ns'] == 1:
+                    if 'ns' in page.keys() and page['ns'] == '1':
                         all_revisions.append(deepcopy(revision))
                     revision.clear()
 
                 elif tag == 'page':
-                    if page['ns'] == 1:
+                    if 'ns' in page.keys() and page['ns'] == '1':
                         all_pages.append(deepcopy(page))
                     page.clear()
 
@@ -61,8 +64,9 @@ def parse_xml(path, maxlength):
                 parent = queue[-2]
 
             if 'contributor' == parent:
-                if elem.text is not None:
-                    user[tag] = elem.text
+                if tag in [ 'ip', 'username', 'id' ]:
+                    if elem.text is not None:
+                        user[tag] = elem.text
                 
             if 'revision' == parent:
                 if elem.text is not None:
