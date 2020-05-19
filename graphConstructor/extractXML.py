@@ -25,7 +25,7 @@ def parse_xml(path, maxlength):
     for event, elem in context:
         try:
             if (len(all_revisions) + len(all_pages)) >= maxlength:
-                yield ( deepcopy(all_pages), deepcopy(all_revisions) )
+                yield ( all_pages, all_revisions )
                 all_revisions.clear()
                 all_pages.clear()
 
@@ -47,13 +47,11 @@ def parse_xml(path, maxlength):
                     if 'title' in page.keys():
                         revision['title'] = page['title']
                     revision.pop('contributor',None)
-                    if 'ns' in page.keys() and page['ns'] == '1':
-                        all_revisions.append(deepcopy(revision))
+                    all_revisions.append(deepcopy(revision))
                     revision.clear()
 
                 elif tag == 'page':
-                    if 'ns' in page.keys() and page['ns'] == '1':
-                        all_pages.append(deepcopy(page))
+                    all_pages.append(deepcopy(page))
                     page.clear()
 
                 queue.pop(-1)
@@ -85,10 +83,11 @@ def parse_xml(path, maxlength):
             logging.error(f'error while process {revision}')
             logging.error(f'error while process {page}')
             logging.error(f'error while process {user}')
+    yield ( all_pages, all_revisions )
 
 if __name__ == '__main__':
     path = '/d1/home/saito/Wikipedia_mining/data/rawdata/thwiki-20200201-pages-meta-history.xml'
-    xml_generator = parse_xml(path, 50000) 
+    xml_generator = parse_xml(path, 500000) 
 
     # authenmongo
     load_dotenv(dotenv_path = '../.env') 
@@ -115,5 +114,7 @@ if __name__ == '__main__':
             pages_col.insert_many(pages)
             revs_col.insert_many(revs)
             logging.info(f'insert in db success')
+            del pages
+            del revs
         except StopIteration:
             break
